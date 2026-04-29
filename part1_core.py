@@ -163,11 +163,14 @@ def ai_similarity(loc_lost, loc_found, desc_lost, desc_found):
 
 def init_db():
     Base.metadata.create_all(engine)
-    s = Session()
-    if not s.query(User).filter_by(username="admin").first():
-        s.add(User(username="admin", password_hash=_hash("admin123"),
-                   role="super_admin", fio="Super Administrator"))
-    s.commit(); s.close()
+    session = Session()
+    # Проверяем, есть ли админ, чтобы не создавать дубликаты
+    existing_admin = session.query(User).filter_by(username='admin').first()
+    if not existing_admin:
+        admin_user = User(username='admin', password='123', role='admin')
+        session.add(admin_user)
+        session.commit()
+    session.close()
 
 init_db()
 
