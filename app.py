@@ -691,61 +691,197 @@ def page_passenger():
                 s.close()
 
     with tab_pay:
-        st.markdown("### 💳 Payment Portal (Simulated)")
+        st.markdown("### 💳 Payment Portal")
         st.info("Enter your Claim ID to view and process payments.")
-        pay_id = st.text_input("Claim ID for Payment", placeholder="L-2026-0001", key="pay_claim_id").upper().strip()
+
+        # ── helpers ──────────────────────────────────────────────────────────
+        def _fmt_card(raw: str) -> str:
+            """Format card number: keep only digits, group by 4."""
+            digits = "".join(c for c in raw if c.isdigit())[:16]
+            return " ".join(digits[i:i+4] for i in range(0, len(digits), 4))
+
+        def _detect_network(raw: str) -> str:
+            digits = "".join(c for c in raw if c.isdigit())
+            if digits.startswith("4"):
+                return "visa"
+            if digits[:2] in [str(i) for i in range(51, 56)] or digits[:4] in [
+                str(i) for i in range(2221, 2721)
+            ]:
+                return "mastercard"
+            return "unknown"
+
+        def _validate_card(raw: str, exp: str, cvv: str, holder: str) -> list:
+            errs = []
+            digits = "".join(c for c in raw if c.isdigit())
+            if len(digits) != 16:
+                errs.append("Card number must be 16 digits.")
+            if _detect_network(raw) == "unknown":
+                errs.append("Only Visa and Mastercard are accepted.")
+            import re
+            if not re.match(r"^(0[1-9]|1[0-2])\/\d{2}$", exp):
+                errs.append("Expiry must be MM/YY.")
+            else:
+                month, year = int(exp[:2]), int(exp[3:]) + 2000
+                now = datetime.now()
+                if (year, month) < (now.year, now.month):
+                    errs.append("Card is expired.")
+            if not re.match(r"^\d{3,4}$", cvv):
+                errs.append("CVV must be 3 or 4 digits.")
+            if len(holder.strip()) < 3:
+                errs.append("Cardholder name is required.")
+            return errs
+
+        def _card_form(key_prefix: str, amount: float, label: str):
+            """Render card input fields; return (is_submitted, errors, method, card_last4)."""
+            st.markdown(f"##### 💳 Card Details — {label}")
+            holder = st.text_input("Cardholder Name", placeholder="JOHN SMITH",
+                                   key=f"{key_prefix}_holder")
+            raw_card = st.text_input("Card Number", placeholder="4111 1111 1111 1111",
+                                     max_chars=19, key=f"{key_prefix}_card")
+            # Auto-detect network
+            net = _detect_network(raw_card)
+            if raw_card:
+                if net == "visa":
+                    st.markdown(
+                        '<span style="color:#1a56db;font-weight:700;font-size:.9rem;">💳 VISA</span>',
+                        unsafe_allow_html=True)
+                elif net == "mastercard":
+                    st.markdown(
+                        '<span style="color:#eb001b;font-weight:700;font-size:.9rem;">'
+                        '🔴🟡 MASTERCARD</span>',
+                        unsafe_allow_html=True)
+                else:
+                    st.markdown(
+                        '<span style="color:#9ca3af;font-size:.85rem;">⚠️ Unknown network</span>',
+                        unsafe_allow_html=True)
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                exp = st.text_input("Expiry MM/YY", placeholder="09/27",
+                                    max_chars=5, key=f"{key_prefix}_exp")
+            with ec2:
+                cvv = st.text_input("CVV", placeholder="123", max_chars=4,
+                                    type="password", key=f"{key_prefix}_cvv")
+            submitted = st.button(f"💳 Pay ${amount:.2f}", type="primary",
+                                  use_container_width=True, key=f"{key_prefix}_submit")
+            if submitted:
+                errs = _validate_card(raw_card, exp, cvv, holder)
+                digits = "".join(c for c in raw_card if c.isdigit())
+                last4 = digits[-4:] if len(digits) >= 4 else "????"
+                return True, errs, net.upper(), last4
+            return False, [], "", ""
+
+        # ── main flow ────────────────────────────────────────────────────────
+        pay_id = st.text_input(
+            "Claim ID for Payment", placeholder="L-2026-0001",
+            key="pay_claim_id").upper().strip()
+
         if pay_id:
             s = Session()
             cl = s.query(LostClaim).filter(LostClaim.l_number == pay_id).first()
+
             if cl:
+                # Snapshot values before closing session
+                cl_id           = cl.id
+                cl_lnum         = cl.l_number
+                cl_name         = cl.passenger_name
+                cl_status       = cl.status
+                cl_fee_paid     = cl.fee_paid
+                cl_comm_paid    = cl.commission_paid
+                cl_est_val      = cl.estimated_value
+                s.close()
+
                 st.markdown(f"""
                 <div class="info-card">
-                  <b>{cl.l_number}</b> — {cl.passenger_name}<br>
-                  Status: <b>{cl.status}</b>
+                  <b>{cl_lnum}</b> — {cl_name}<br>
+                  Status: <b>{cl_status}</b>
                 </div>""", unsafe_allow_html=True)
                 st.markdown("---")
+
                 pc1, pc2 = st.columns(2)
+
+                # ── Registration Fee ($10) ────────────────────────────────
                 with pc1:
                     st.markdown("""<div class="pay-card">
                       <h4>Registration Fee: $10.00</h4>
-                      <p style="font-size:.85rem;opacity:.8;">One-time claim registration fee</p>
+                      <p style="font-size:.85rem;opacity:.8;">
+                        One-time claim registration fee.<br>
+                        Accepted: Visa &amp; Mastercard only.</p>
                     </div>""", unsafe_allow_html=True)
-                    if cl.fee_paid:
+
+                    if cl_fee_paid:
                         st.success("✅ Registration Fee PAID")
                     else:
-                        st.markdown("##### Payment Method")
-                        pay_method = st.selectbox("Select", ["Visa","Mastercard","Payoneer"], key="pm1")
-                        card_num = st.text_input("Card Number", placeholder="4111 1111 1111 1111", key="cn1")
-                        if st.button("💳 Pay $10 Registration Fee", type="primary", key="pay_fee_btn"):
-                            cl.fee_paid = True
-                            s.commit()
-                            audit("PAYMENT", f"Fee $10 paid for {cl.l_number} via {pay_method}")
-                            st.success("✅ Payment processed!")
-                            st.rerun()
+                        submitted1, errs1, method1, last4_1 = _card_form(
+                            "fee", 10.00, "$10 Registration Fee")
+                        if submitted1:
+                            if errs1:
+                                for e in errs1:
+                                    st.error(e)
+                            else:
+                                s2 = Session()
+                                try:
+                                    cl2 = s2.query(LostClaim).get(cl_id)
+                                    cl2.fee_paid = True
+                                    s2.commit()
+                                    audit("PAYMENT",
+                                          f"Fee $10 for {cl_lnum} via {method1} "
+                                          f"****{last4_1}")
+                                    st.success(
+                                        f"✅ $10 paid via {method1} ****{last4_1}")
+                                    st.rerun()
+                                except Exception as e:
+                                    s2.rollback()
+                                    st.error(f"Payment error: {e}")
+                                finally:
+                                    s2.close()
+
+                # ── Commission ($20 + 10%) ────────────────────────────────
                 with pc2:
-                    if cl.status in ["Matched","Returned"]:
-                        comm = 20 + (cl.estimated_value * 0.1)
+                    if cl_status in ["Matched", "Returned"]:
+                        comm = 20.0 + (cl_est_val * 0.1)
                         st.markdown(f"""<div class="pay-card">
                           <h4>Commission: ${comm:.2f}</h4>
-                          <p style="font-size:.85rem;opacity:.8;">$20 base + 10% of ${cl.estimated_value:.2f} value</p>
+                          <p style="font-size:.85rem;opacity:.8;">
+                            $20 base + 10% of ${cl_est_val:.2f} item value.<br>
+                            Accepted: Visa &amp; Mastercard only.</p>
                         </div>""", unsafe_allow_html=True)
-                        if cl.commission_paid:
+
+                        if cl_comm_paid:
                             st.success("✅ Commission PAID")
                         else:
-                            pay_m2 = st.selectbox("Method", ["Visa","Mastercard","Payoneer"], key="pm2")
-                            card2  = st.text_input("Card Number", placeholder="5500 0000 0000 0004", key="cn2")
-                            if st.button(f"💳 Pay ${comm:.2f} Commission", type="primary", key="pay_comm_btn"):
-                                cl.commission_paid = True
-                                cl.reward_amount = cl.estimated_value * 0.1
-                                s.commit()
-                                audit("PAYMENT", f"Commission ${comm:.2f} for {cl.l_number}")
-                                st.success("✅ Commission paid!")
-                                st.rerun()
+                            submitted2, errs2, method2, last4_2 = _card_form(
+                                "comm", comm,
+                                f"${comm:.2f} Commission")
+                            if submitted2:
+                                if errs2:
+                                    for e in errs2:
+                                        st.error(e)
+                                else:
+                                    s3 = Session()
+                                    try:
+                                        cl3 = s3.query(LostClaim).get(cl_id)
+                                        cl3.commission_paid = True
+                                        cl3.reward_amount   = cl_est_val * 0.1
+                                        s3.commit()
+                                        audit("PAYMENT",
+                                              f"Commission ${comm:.2f} for {cl_lnum} "
+                                              f"via {method2} ****{last4_2}")
+                                        st.success(
+                                            f"✅ ${comm:.2f} paid via "
+                                            f"{method2} ****{last4_2}")
+                                        st.rerun()
+                                    except Exception as e:
+                                        s3.rollback()
+                                        st.error(f"Payment error: {e}")
+                                    finally:
+                                        s3.close()
                     else:
-                        st.info("Commission payment available after item is matched.")
+                        st.info(
+                            "💡 Commission payment becomes available "
+                            "once your item is matched.")
             else:
-                st.error("Claim not found.")
-            s.close()
+                s.close()
+                st.error("❌ Claim not found. Check the Claim ID and try again.")
 
 def page_staff():
     if not st.session_state.logged_in or st.session_state.user_role not in ["staff","super_admin"]:
@@ -881,31 +1017,30 @@ def page_staff():
                 f'<span style="color:#6b7280;">AI Similarity Score</span></div>', unsafe_allow_html=True)
             s.close()
 
-            if st.button("🤝 Create Match", use_container_width=True):
+            if st.button("🔗 Create Match", type="primary", use_container_width=True):
+                selected_claim_id = copts[sck]
+                selected_found_id = fopts[sfk]
                 s = Session()
-         try:
-            cl = s.query(Claim).get(selected_claim_id)
-            fi = s.query(FoundItem).get(selected_found_id)
-            
-            if cl and fi:
-                claim_no = cl.l_number
-                found_no = fi.f_number
-                
-                cl.status = "Matched"
-                fi.status = "Matched"
-                
-                audit("MATCH", f"{claim_no} ↔ {found_no}")
-                s.commit()
-                st.success(f"✅ Match Created: {claim_no}")
+                try:
+                    cl_fresh = s.query(LostClaim).get(selected_claim_id)
+                    fi_fresh = s.query(FoundItem).get(selected_found_id)
+                    if cl_fresh and fi_fresh:
+                        cl_fresh.status       = "Matched"
+                        cl_fresh.found_item_id = fi_fresh.id
+                        fi_fresh.status       = "identified"
+                        cl_num = cl_fresh.l_number
+                        fi_num = fi_fresh.f_number
+                        s.commit()
+                        audit("MATCH", f"{cl_num} ↔ {fi_num}")
+                        st.success(f"✅ Match created: {cl_num} ↔ {fi_num}")
+                    else:
+                        st.error("Could not find claim or found item. Please refresh.")
+                except Exception as e:
+                    s.rollback()
+                    st.error(f"❌ Error creating match: {e}")
+                finally:
+                    s.close()
                 st.rerun()
-            else:
-                st.error("Could not find Claim or Found Item in database.")
-        except Exception as e:
-            s.rollback()
-            st.error(f"❌ Database Error: {e}")
-        finally:
-            s.close()
-
     with tab_acts:
         st.markdown("### 📄 Generate Acts")
         act_type = st.radio("Act Type", ["Return Act","Disposal Act"], horizontal=True)
