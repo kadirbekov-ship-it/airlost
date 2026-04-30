@@ -882,38 +882,37 @@ def page_staff():
             s.close()
 
             if st.button("🤝 Create Match", use_container_width=True):
-            s = Session()
-            try:
+                s = Session()
+                try:
                 # 1. Сначала находим объекты в базе
                 # (Убедись, что переменные selected_claim_id и selected_found_id определены выше в твоем коде)
                 cl = s.query(Claim).get(selected_claim_id)
                 fi = s.query(FoundItem).get(selected_found_id)
 
                 if cl and fi:
-                    # 2. КРИТИЧЕСКИЙ МОМЕНТ: сохраняем номера в обычные переменные,
-                    # пока сессия еще открыта.
+                    # 2. КРИТИЧЕСКИЙ МОМЕНТ: сохраняем номера в обычные переменные
                     claim_no = cl.l_number
                     found_no = fi.f_number
 
-                    # 3. Обновляем статусы
+                    # 3. Обновляем статусы (Теперь с правильным отступом!)
                     cl.status = "Matched"
                     cl.matched_with = fi.id
                     fi.status = "Matched"
                     fi.matched_with = cl.id
-                    
-                    # 4. Записываем в аудит, используя сохраненные переменные
+
+                    # 4. Записываем в аудит
                     audit("MATCH", f"{claim_no} ↔ {found_no}")
-                    
+
                     s.commit()
                     st.success(f"✅ Match Created: {claim_no}")
                     st.balloons()
                     st.rerun()
                 else:
                     st.error("Could not find Claim or Found Item in database.")
-            except Exception as e:
+                except Exception as e:
                 s.rollback()
                 st.error(f"❌ Database Error: {e}")
-            finally:
+                finally:
                 # 5. Закрываем сессию только в самом конце
                 s.close()
 
