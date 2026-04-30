@@ -91,7 +91,9 @@ class FoundItem(Base):
     image_path2   = Column(String(350))
     image_path3   = Column(String(350))
     
-    # ПРОВЕРЬ ЭТУ СТРОКУ, ОНА ДОЛЖНА БЫТЬ:
+    # Дата и время когда нашли предмет
+    found_datetime = Column(DateTime, nullable=True)
+    
     status        = Column(String(30), default="registered")
     
     created_by_id = Column(Integer, ForeignKey("users.id"))
@@ -154,15 +156,59 @@ def audit(action, detail=""):
     s.commit(); s.close()
 
 def ai_similarity(loc_lost, loc_found, desc_lost, desc_found):
-    """Simple similarity score between lost/found items."""
-    s1 = difflib.SequenceMatcher(None, (loc_lost or "").lower(),
-                                  (loc_found or "").lower()).ratio()
-    s2 = difflib.SequenceMatcher(None, (desc_lost or "").lower(),
-                                  (desc_found or "").lower()).ratio()
-    return round((s1 * 0.4 + s2 * 0.6) * 100, 1)
+    """Enhanced similarity: location + description + keyword matching."""
+    import re
+    
+    # Normalize text
+    def normalize(txt):
+        return re.sub(r'[^\w\s]', '', (txt or "").lower().strip())
+    
+    loc_l = normalize(loc_lost)
+    loc_f = normalize(loc_found)
+    desc_l = normalize(desc_lost)
+    desc_f = normalize(desc_found)
+    
+    # Location similarity
+    s_loc = difflib.SequenceMatcher(None, loc_l, loc_f).ratio()
+    
+    # Description similarity
+    s_desc = difflib.SequenceMatcher(None, desc_l, desc_f).ratio()
+    
+    # Keyword matching (items like "passport", "phone", "bag", "laptop", etc.)
+    keywords = ["passport", "phone", "iphone", "samsung", "laptop", "macbook", 
+                "bag", "suitcase", "backpack", "wallet", "purse", "keys", 
+                "watch", "camera", "tablet", "ipad", "headphones", "charger",
+                "документ", "паспорт", "телефон", "сумка", "кошелек", "ключи"]
+    
+    found_keywords_lost = [k for k in keywords if k in desc_l]
+    found_keywords_found = [k for k in keywords if k in desc_f]
+    
+    # Keyword match bonus
+    common_keywords = set(found_keywords_lost) & set(found_keywords_found)
+    keyword_boost = len(common_keywords) * 15  # +15% per matching keyword
+    
+    # Combined score: 30% location, 60% description, 10% base + keyword boost
+    base_score = (s_loc * 30) + (s_desc * 60) + 10
+    final_score = min(base_score + keyword_boost, 100)
+    
+    return round(final_score, 1)
 
 def init_db():
     Base.metadata.create_all(engine)
+    
+    # Auto-migration: add found_datetime if missing
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    columns = [c['name'] for c in inspector.get_columns('found_items')]
+    if 'found_datetime' not in columns:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE found_items ADD COLUMN found_datetime DATETIME"))
+                conn.commit()
+            print("✅ Added found_datetime column")
+        except Exception as e:
+            print(f"Migration warning: {e}")
+    
     s = Session()
     if not s.query(User).filter_by(username="admin").first():
         s.add(User(username="admin", password_hash=_hash("admin123"),
@@ -663,29 +709,143 @@ def page_passenger():
                 results = q.all()
                 if results:
                     for cl in results:
+                        # Snapshot before closing session
+                        cl_id = cl.id
+                        cl_lnum = cl.l_number
+                        cl_name = cl.passenger_name
+                        cl_status = cl.status
+                        cl_desc = cl.description
+                        cl_created = cl.created_at
+                        cl_fee_paid = cl.fee_paid
+                        cl_comm_paid = cl.commission_paid
+                        cl_est_val = cl.estimated_value
+                        
                         co = {"Searching":("#fff7ed","#c2410c"),"Matched":("#f0fdf4","#15803d"),
                               "Returned":("#eff6ff","#1d4ed8"),"Disposed":("#fef2f2","#991b1b")}
-                        bg, fg = co.get(cl.status, ("#fff","#000"))
+                        bg, fg = co.get(cl_status, ("#fff","#000"))
                         ic = {"Searching":"⏳","Matched":"🔗","Returned":"🎉","Disposed":"🗑️"}
                         st.markdown(f"""
                         <div style="background:{bg};border-radius:12px;padding:1.3rem 1.7rem;
                                     border-left:5px solid {fg};margin-top:1rem;">
-                          <h3 style="color:{fg};margin:0;">{ic.get(cl.status,'•')} {cl.l_number}</h3>
+                          <h3 style="color:{fg};margin:0;">{ic.get(cl_status,'•')} {cl_lnum}</h3>
                           <table style="margin-top:.7rem;width:100%;font-size:.88rem;">
                             <tr><td style="padding:.28rem;color:#6b7280;width:160px;"><b>Passenger</b></td>
-                                <td>{cl.passenger_name}</td></tr>
+                                <td>{cl_name}</td></tr>
                             <tr><td style="padding:.28rem;color:#6b7280;"><b>Status</b></td>
-                                <td><b style="color:{fg};">{cl.status.upper()}</b></td></tr>
+                                <td><b style="color:{fg};">{cl_status.upper()}</b></td></tr>
                             <tr><td style="padding:.28rem;color:#6b7280;"><b>Description</b></td>
-                                <td>{(cl.description or "")[:90]}</td></tr>
+                                <td>{(cl_desc or "")[:90]}</td></tr>
                             <tr><td style="padding:.28rem;color:#6b7280;"><b>Filed</b></td>
-                                <td>{cl.created_at.strftime("%d %B %Y, %H:%M")}</td></tr>
+                                <td>{cl_created.strftime("%d %B %Y, %H:%M")}</td></tr>
                           </table>
                         </div>""", unsafe_allow_html=True)
-                        if cl.status == "Matched":
+                        
+                        if cl_status == "Matched":
                             st.success("🎉 Your item has been found! We will contact you soon.")
-                        elif cl.status == "Returned":
+                        elif cl_status == "Returned":
                             st.success("✅ Item returned. Thank you for using Losty!")
+                        
+                        # ────── PAYMENT SECTION ──────
+                        st.markdown("---")
+                        st.markdown("### 💳 Payments")
+                        
+                        pc1, pc2 = st.columns(2)
+                        
+                        # Registration Fee
+                        with pc1:
+                            st.markdown(f"""<div style="background:#f9fafb;border-radius:10px;
+                                padding:1rem;border:1px solid #e5e7eb;">
+                              <h4 style="margin:0 0 .5rem;">Registration Fee: $10.00</h4>
+                              <p style="font-size:.85rem;color:#6b7280;margin:0;">
+                                One-time claim processing fee.</p>
+                            </div>""", unsafe_allow_html=True)
+                            
+                            if cl_fee_paid:
+                                st.success("✅ Registration Fee PAID")
+                            else:
+                                pay_method_fee = st.radio("Payment Method", 
+                                    ["💳 Visa/Mastercard", "📧 Payoneer Email"],
+                                    key=f"pm_fee_{cl_lnum}", horizontal=True)
+                                
+                                if "Visa/Mastercard" in pay_method_fee:
+                                    with st.form(f"card_fee_{cl_lnum}"):
+                                        holder = st.text_input("Cardholder Name", placeholder="JOHN SMITH")
+                                        card_num = st.text_input("Card Number", placeholder="4111 1111 1111 1111", max_chars=19)
+                                        ec1, ec2 = st.columns(2)
+                                        with ec1: exp = st.text_input("MM/YY", placeholder="12/27", max_chars=5)
+                                        with ec2: cvv = st.text_input("CVV", placeholder="123", type="password", max_chars=4)
+                                        if st.form_submit_button("💳 Pay $10", type="primary", use_container_width=True):
+                                            if len(card_num.replace(" ","")) == 16 and len(cvv) >= 3:
+                                                s2 = Session()
+                                                try:
+                                                    cl2 = s2.query(LostClaim).get(cl_id)
+                                                    cl2.fee_paid = True
+                                                    s2.commit()
+                                                    last4 = card_num.replace(" ","")[-4:]
+                                                    audit("PAYMENT", f"Fee $10 for {cl_lnum} via CARD ****{last4}")
+                                                    st.success(f"✅ $10 paid via ****{last4}")
+                                                    st.rerun()
+                                                except Exception as e:
+                                                    s2.rollback()
+                                                    st.error(f"Error: {e}")
+                                                finally:
+                                                    s2.close()
+                                            else:
+                                                st.error("Invalid card details")
+                                else:
+                                    # Payoneer
+                                    st.info(f"💡 Send **$10 USD** to: **kadirbekov@gmail.com** (Payoneer)")
+                                    st.markdown("After payment, contact support with transaction ID.")
+                        
+                        # Commission
+                        with pc2:
+                            if cl_status in ["Matched", "Returned"]:
+                                comm = 20.0 + (cl_est_val * 0.1)
+                                st.markdown(f"""<div style="background:#f9fafb;border-radius:10px;
+                                    padding:1rem;border:1px solid #e5e7eb;">
+                                  <h4 style="margin:0 0 .5rem;">Commission: ${comm:.2f}</h4>
+                                  <p style="font-size:.85rem;color:#6b7280;margin:0;">
+                                    $20 base + 10% of item value (${cl_est_val:.2f})</p>
+                                </div>""", unsafe_allow_html=True)
+                                
+                                if cl_comm_paid:
+                                    st.success("✅ Commission PAID")
+                                else:
+                                    pay_method_comm = st.radio("Payment Method", 
+                                        ["💳 Visa/Mastercard", "📧 Payoneer Email"],
+                                        key=f"pm_comm_{cl_lnum}", horizontal=True)
+                                    
+                                    if "Visa/Mastercard" in pay_method_comm:
+                                        with st.form(f"card_comm_{cl_lnum}"):
+                                            holder2 = st.text_input("Cardholder Name", placeholder="JOHN SMITH", key=f"h2_{cl_lnum}")
+                                            card2 = st.text_input("Card Number", placeholder="5500 0000 0000 0004", max_chars=19, key=f"c2_{cl_lnum}")
+                                            ec3, ec4 = st.columns(2)
+                                            with ec3: exp2 = st.text_input("MM/YY", placeholder="12/27", max_chars=5, key=f"e2_{cl_lnum}")
+                                            with ec4: cvv2 = st.text_input("CVV", placeholder="123", type="password", max_chars=4, key=f"cv2_{cl_lnum}")
+                                            if st.form_submit_button(f"💳 Pay ${comm:.2f}", type="primary", use_container_width=True):
+                                                if len(card2.replace(" ","")) == 16 and len(cvv2) >= 3:
+                                                    s3 = Session()
+                                                    try:
+                                                        cl3 = s3.query(LostClaim).get(cl_id)
+                                                        cl3.commission_paid = True
+                                                        cl3.reward_amount = cl_est_val * 0.1
+                                                        s3.commit()
+                                                        last4_2 = card2.replace(" ","")[-4:]
+                                                        audit("PAYMENT", f"Comm ${comm:.2f} for {cl_lnum} via CARD ****{last4_2}")
+                                                        st.success(f"✅ ${comm:.2f} paid via ****{last4_2}")
+                                                        st.rerun()
+                                                    except Exception as e:
+                                                        s3.rollback()
+                                                        st.error(f"Error: {e}")
+                                                    finally:
+                                                        s3.close()
+                                                else:
+                                                    st.error("Invalid card details")
+                                    else:
+                                        st.info(f"💡 Send **${comm:.2f} USD** to: **kadirbekov@gmail.com** (Payoneer)")
+                                        st.markdown("After payment, contact support with transaction ID.")
+                            else:
+                                st.info("💡 Commission payment available after item is matched.")
                 else:
                     st.error("No claims found.")
                 s.close()
@@ -902,6 +1062,13 @@ def page_staff():
                 f_loc = st.text_input("Where Found *", placeholder="Gate B12, Baggage Hall...")
                 f_finder = st.text_input("Finder Name", placeholder="Staff name or passenger")
                 f_flight = st.text_input("Flight Number (optional)", placeholder="HY-201")
+                # Дата и время находки
+                st.markdown("##### 📅 When was it found?")
+                dc1, dc2 = st.columns(2)
+                with dc1:
+                    found_date = st.date_input("Date Found", value=date.today())
+                with dc2:
+                    found_time = st.time_input("Time Found", value=datetime.now().time())
             with c2:
                 st.markdown("##### 📷 Photos (up to 3)")
                 f_img1 = st.file_uploader("Photo 1", type=["jpg","jpeg","png","webp"], key="fi1")
@@ -916,9 +1083,12 @@ def page_staff():
                     p1 = _save_upload(f_img1,"found") if f_img1 else None
                     p2 = _save_upload(f_img2,"found") if f_img2 else None
                     p3 = _save_upload(f_img3,"found") if f_img3 else None
+                    # Combine date + time
+                    found_dt = datetime.combine(found_date, found_time)
                     s.add(FoundItem(f_number=fnum, description=f_desc, location_found=f_loc,
                                     finder_name=f_finder, flight_number=f_flight,
                                     image_path1=p1, image_path2=p2, image_path3=p3,
+                                    found_datetime=found_dt,
                                     created_by_id=st.session_state.user_id))
                     s.commit(); s.close()
                     audit("REGISTER_FOUND", f"{fnum} at {f_loc}")
