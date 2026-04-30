@@ -522,27 +522,29 @@ with st.sidebar:
             pwd = st.text_input("Password", type="password")
             if st.form_submit_button("Login", use_container_width=True):
                 s = Session()
+                # Используем твою проверку пароля через _hash
                 user = s.query(User).filter_by(username=uname, password_hash=_hash(pwd)).first()
                 s.close()
                 if user:
-                    st.session_state.update({"logged_in":True,"user_role":user.role,
-                        "username":user.username,"user_id":user.id,"fio":user.fio})
+                    st.session_state.update({
+                        "logged_in": True,
+                        "user_role": user.role,
+                        "username": user.username,
+                        "user_id": user.id,
+                        "fio": user.fio
+                    })
                     audit("LOGIN", f"{user.username} ({user.role})")
+                    
+                    # --- ВОТ ЭТОТ БЛОК ОТВЕЧАЕТ ЗА ПЕРЕХОД ---
+                    if user.role in ['admin', 'super_admin']:
+                        st.session_state.page = "admin" # Проверь, как называется страница админа в коде выше
+                    else:
+                        st.session_state.page = "staff"
+                    # ----------------------------------------
+                    
                     st.rerun()
                 else:
                     st.error("Invalid credentials.")
-    else:
-        labels = {"staff":"🏛️ Staff","super_admin":"👑 Super Admin"}
-        st.markdown(f"**{st.session_state.fio}**")
-        st.markdown(f"`{labels.get(st.session_state.user_role,'')}`")
-        if st.button("🚪 Logout", use_container_width=True):
-            audit("LOGOUT", st.session_state.username)
-            for k in _DEFS: st.session_state[k] = _DEFS[k]
-            st.session_state.page = "passenger"; st.rerun()
-    st.markdown("---")
-    st.markdown('<div style="font-size:.71rem;color:#888;text-align:center;line-height:1.75;"><b>Demo login</b><br>admin / admin123</div>', unsafe_allow_html=True)
-
-
 def page_passenger():
     header("🧳 Passenger Hub", "Lost something at the airport? File a claim and track your item.")
     tab_file, tab_track, tab_pay = st.tabs(["📝 File a Claim", "🔍 Track Claim", "💳 Payment"])
