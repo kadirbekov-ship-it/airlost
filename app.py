@@ -501,20 +501,28 @@ st.set_page_config(page_title="Losty Platform | Airport Lost & Found",
                    page_icon="✈️", layout="wide", initial_sidebar_state="expanded")
 st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
-# ── SIDEBAR ──────────────────────────────────────────────────────────────────
+# --- SIDEBAR & NAVIGATION ---
 with st.sidebar:
     st.markdown('<div class="sidebar-brand"><h2>✈️ Losty Platform</h2><p>Airport Lost &amp; Found</p></div>', unsafe_allow_html=True)
+    
     st.markdown("#### 🗺️ Navigation")
+    
     def nav_btn(label, page, roles=None):
         if roles and (not st.session_state.logged_in or st.session_state.user_role not in roles):
             return
-        if st.button(label, use_container_width=True,
-                     type="primary" if st.session_state.page==page else "secondary"):
-            st.session_state.page = page; st.rerun()
-    nav_btn("🧳 Passenger Hub", "passenger")
-    nav_btn("🏛️ Staff Portal", "staff", ["staff","super_admin"])
-    nav_btn("👑 Super-Admin", "admin", ["super_admin"])
+        # Если кнопка активна — она синяя (primary)
+        b_type = "primary" if st.session_state.page == page else "secondary"
+        if st.button(label, use_container_width=True, type=b_type):
+            st.session_state.page = page
+            st.rerun()
+
+    nav_btn("💼 Passenger Hub", "passenger")
+    nav_btn("🏛️ Staff Portal", "staff", ["staff", "super_admin", "admin"])
+    nav_btn("👑 Super-Admin", "admin", ["super_admin", "admin"])
+    
     st.markdown("---")
+
+    # Проверка: если НЕ залогинен — показываем форму входа
     if not st.session_state.logged_in:
         st.markdown("#### 🔐 Staff / Admin Login")
         with st.form("login_form", clear_on_submit=True):
@@ -522,9 +530,9 @@ with st.sidebar:
             pwd = st.text_input("Password", type="password")
             if st.form_submit_button("Login", use_container_width=True):
                 s = Session()
-                # Используем твою проверку пароля через _hash
                 user = s.query(User).filter_by(username=uname, password_hash=_hash(pwd)).first()
                 s.close()
+                
                 if user:
                     st.session_state.update({
                         "logged_in": True,
@@ -535,16 +543,30 @@ with st.sidebar:
                     })
                     audit("LOGIN", f"{user.username} ({user.role})")
                     
-                    # --- ВОТ ЭТОТ БЛОК ОТВЕЧАЕТ ЗА ПЕРЕХОД ---
+                    # АВТО-ПЕРЕХОД: направляем в нужный раздел сразу
                     if user.role in ['admin', 'super_admin']:
-                        st.session_state.page = "admin" # Проверь, как называется страница админа в коде выше
+                        st.session_state.page = "admin"
                     else:
                         st.session_state.page = "staff"
-                    # ----------------------------------------
-                    
                     st.rerun()
                 else:
                     st.error("Invalid credentials.")
+    
+    # Если залогинен — показываем профиль и кнопку выхода
+    else:
+        st.markdown(f"👤 **{st.session_state.fio}**")
+        r_label = "🛡️ Admin" if st.session_state.user_role in ['admin', 'super_admin'] else "🏛️ Staff"
+        st.markdown(f"`{r_label}`")
+        
+        if st.button("🚪 Logout", use_container_width=True):
+            audit("LOGOUT", st.session_state.username)
+            # Сброс сессии
+            st.session_state.logged_in = False
+            st.session_state.user_role = None
+            st.session_state.page = "passenger"
+            st.rerun()
+
+    st.markdown("---")
 def page_passenger():
     header("🧳 Passenger Hub", "Lost something at the airport? File a claim and track your item.")
     tab_file, tab_track, tab_pay = st.tabs(["📝 File a Claim", "🔍 Track Claim", "💳 Payment"])
