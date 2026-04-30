@@ -1017,30 +1017,35 @@ def page_staff():
                 f'<span style="color:#6b7280;">AI Similarity Score</span></div>', unsafe_allow_html=True)
             s.close()
 
-            if st.button("🔗 Create Match", type="primary", use_container_width=True):
-                selected_claim_id = copts[sck]
-                selected_found_id = fopts[sfk]
-                s = Session()
-                try:
-                    cl_fresh = s.query(LostClaim).get(selected_claim_id)
-                    fi_fresh = s.query(FoundItem).get(selected_found_id)
-                    if cl_fresh and fi_fresh:
-                        cl_fresh.status       = "Matched"
-                        cl_fresh.found_item_id = fi_fresh.id
-                        fi_fresh.status       = "identified"
-                        cl_num = cl_fresh.l_number
-                        fi_num = fi_fresh.f_number
-                        s.commit()
-                        audit("MATCH", f"{cl_num} ↔ {fi_num}")
-                        st.success(f"✅ Match created: {cl_num} ↔ {fi_num}")
-                    else:
-                        st.error("Could not find claim or found item. Please refresh.")
-                except Exception as e:
-                    s.rollback()
-                    st.error(f"❌ Error creating match: {e}")
-                finally:
-                    s.close()
-                st.rerun()
+            if st.button("🔗 Create Match", type="primary", use_container_width=True, key="create_match_btn"):
+
+    if not selected_claim_id or not selected_found_id:
+        st.error("Please select both claim and found item.")
+    else:
+        s = Session()
+        try:
+            cl = s.get(LostClaim, selected_claim_id)
+            fi = s.get(FoundItem, selected_found_id)
+
+            if not cl or not fi:
+                st.error("Data not found. Try refreshing.")
+            else:
+                cl.status = "Matched"
+                cl.found_item_id = fi.id
+                fi.status = "identified"
+
+                s.commit()
+
+                audit("MATCH", f"{cl.l_number} ↔ {fi.f_number}")
+                st.success(f"✅ Match created: {cl.l_number} ↔ {fi.f_number}")
+
+        except Exception as e:
+            s.rollback()
+            st.error(f"❌ Error creating match: {e}")
+        finally:
+            s.close()
+
+        st.rerun()
     with tab_acts:
         st.markdown("### 📄 Generate Acts")
         act_type = st.radio("Act Type", ["Return Act","Disposal Act"], horizontal=True)
